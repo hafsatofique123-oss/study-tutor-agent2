@@ -1,7 +1,19 @@
-import os
-
 import streamlit as st
-from groq import Groq
+from pypdf import PdfReader
+
+from agent import create_study_tutor, run_study_tutor
+from memory import (
+    create_memory,
+    update_memory,
+    get_memory_summary,
+)
+from tools import (
+    create_quiz,
+    create_study_plan,
+    explain_topic,
+    analyze_weak_topic,
+)
+from rag import build_rag_index, search_documents
 
 
 # =========================================================
@@ -17,117 +29,101 @@ st.set_page_config(
 
 
 # =========================================================
-# CUSTOM CSS — MODERN NEON BLUE UI
+# CUSTOM CSS
 # =========================================================
 
 st.markdown(
     """
     <style>
-        .stApp {
-            background:
-                radial-gradient(circle at top left, rgba(0, 191, 255, 0.12), transparent 30%),
-                radial-gradient(circle at bottom right, rgba(0, 102, 255, 0.10), transparent 30%),
-                #050b18;
-            color: #f5f7ff;
-        }
 
-        [data-testid="stSidebar"] {
-            background: #071224;
-            border-right: 1px solid rgba(0, 191, 255, 0.20);
-        }
+    .stApp {
+        background:
+            radial-gradient(
+                circle at top left,
+                rgba(0, 191, 255, 0.13),
+                transparent 30%
+            ),
+            radial-gradient(
+                circle at bottom right,
+                rgba(0, 102, 255, 0.12),
+                transparent 30%
+            ),
+            #050b18;
+        color: #f5f7ff;
+    }
 
-        .main-title {
-            font-size: 3rem;
-            font-weight: 800;
-            text-align: center;
-            margin-top: 1rem;
-            margin-bottom: 0.2rem;
-            color: #ffffff;
-            text-shadow: 0 0 20px rgba(0, 191, 255, 0.55);
-        }
+    [data-testid="stSidebar"] {
+        background: #071224;
+        border-right: 1px solid rgba(0, 191, 255, 0.20);
+    }
 
-        .subtitle {
-            text-align: center;
-            color: #9db5d8;
-            font-size: 1.05rem;
-            margin-bottom: 2rem;
-        }
+    .main-title {
+        font-size: 3rem;
+        font-weight: 800;
+        text-align: center;
+        margin-top: 1rem;
+        margin-bottom: 0.2rem;
+        color: white;
+        text-shadow: 0 0 20px rgba(0, 191, 255, 0.55);
+    }
 
-        .info-card {
-            background: rgba(10, 25, 50, 0.75);
-            border: 1px solid rgba(0, 191, 255, 0.25);
-            border-radius: 18px;
-            padding: 1.2rem;
-            margin-bottom: 1rem;
-            box-shadow: 0 0 25px rgba(0, 191, 255, 0.06);
-        }
+    .subtitle {
+        text-align: center;
+        color: #9db5d8;
+        font-size: 1.05rem;
+        margin-bottom: 2rem;
+    }
 
-        .info-card h3 {
-            color: #4ddcff;
-            margin-bottom: 0.5rem;
-        }
+    .info-card {
+        background: rgba(10, 25, 50, 0.75);
+        border: 1px solid rgba(0, 191, 255, 0.25);
+        border-radius: 18px;
+        padding: 1.2rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 0 25px rgba(0, 191, 255, 0.06);
+    }
 
-        .info-card p {
-            color: #b8c9e6;
-            margin-bottom: 0;
-        }
+    .info-card h3 {
+        color: #4ddcff;
+        margin-bottom: 0.5rem;
+    }
 
-        div[data-testid="stChatMessage"] {
-            border-radius: 16px;
-            border: 1px solid rgba(0, 191, 255, 0.12);
-            margin-bottom: 0.7rem;
-        }
+    .info-card p {
+        color: #b8c9e6;
+        margin-bottom: 0;
+    }
 
-        .stButton > button {
-            width: 100%;
-            border-radius: 12px;
-            border: 1px solid rgba(0, 191, 255, 0.5);
-            background: linear-gradient(
-                135deg,
-                rgba(0, 191, 255, 0.18),
-                rgba(0, 102, 255, 0.18)
-            );
-            color: white;
-            font-weight: 600;
-        }
+    .stButton > button {
+        width: 100%;
+        border-radius: 12px;
+        border: 1px solid rgba(0, 191, 255, 0.5);
+        background: linear-gradient(
+            135deg,
+            rgba(0, 191, 255, 0.18),
+            rgba(0, 102, 255, 0.18)
+        );
+        color: white;
+        font-weight: 600;
+    }
 
-        .stButton > button:hover {
-            border-color: #4ddcff;
-            box-shadow: 0 0 18px rgba(0, 191, 255, 0.30);
-            color: white;
-        }
+    .stButton > button:hover {
+        border-color: #4ddcff;
+        box-shadow: 0 0 18px rgba(0, 191, 255, 0.30);
+    }
 
-        div[data-testid="stChatInput"] {
-            border-color: rgba(0, 191, 255, 0.35);
-        }
+    .status-box {
+        padding: 0.8rem 1rem;
+        border-radius: 12px;
+        background: rgba(0, 191, 255, 0.08);
+        border: 1px solid rgba(0, 191, 255, 0.18);
+        color: #bdefff;
+        margin-top: 1rem;
+    }
 
-        .status-box {
-            padding: 0.8rem 1rem;
-            border-radius: 12px;
-            background: rgba(0, 191, 255, 0.08);
-            border: 1px solid rgba(0, 191, 255, 0.18);
-            color: #bdefff;
-            margin-top: 1rem;
-        }
     </style>
     """,
     unsafe_allow_html=True,
 )
-
-
-# =========================================================
-# GROQ CLIENT
-# =========================================================
-
-def get_groq_client():
-    """Create and return the Groq client."""
-
-    api_key = os.environ.get("GROQ_API_KEY")
-
-    if not api_key:
-        return None
-
-    return Groq(api_key=api_key)
 
 
 # =========================================================
@@ -137,12 +133,25 @@ def get_groq_client():
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+if "memory" not in st.session_state:
+    st.session_state.memory = create_memory()
+
+if "rag_index" not in st.session_state:
+    st.session_state.rag_index = None
+
+if "rag_chunks" not in st.session_state:
+    st.session_state.rag_chunks = []
+
+if "uploaded_file_name" not in st.session_state:
+    st.session_state.uploaded_file_name = None
+
 
 # =========================================================
 # SIDEBAR
 # =========================================================
 
 with st.sidebar:
+
     st.markdown("## 🎓 Study Settings")
 
     subject = st.text_input(
@@ -162,20 +171,107 @@ with st.sidebar:
     learning_goal = st.text_area(
         "🚀 Learning Goal",
         placeholder="What do you want to learn or achieve?",
-        height=120,
+        height=110,
     )
 
     st.markdown("---")
 
+    st.markdown("### 📄 Study Material")
+
+    uploaded_file = st.file_uploader(
+        "Upload a PDF",
+        type=["pdf"],
+        help="PDF is optional. You can use the tutor without uploading a PDF.",
+    )
+
+    if uploaded_file is not None:
+
+        if (
+            st.session_state.uploaded_file_name
+            != uploaded_file.name
+        ):
+
+            with st.spinner("📚 Reading your PDF..."):
+
+                try:
+
+                    reader = PdfReader(uploaded_file)
+
+                    page_texts = []
+
+                    for page_number, page in enumerate(
+                        reader.pages,
+                        start=1,
+                    ):
+
+                        text = page.extract_text() or ""
+
+                        if text.strip():
+
+                            page_texts.append(
+                                f"\n[PAGE {page_number}]\n{text}"
+                            )
+
+                    complete_text = "\n".join(page_texts)
+
+                    if not complete_text.strip():
+
+                        st.error(
+                            "I could not extract readable text from this PDF."
+                        )
+
+                    else:
+
+                        index, chunks = build_rag_index(
+                            complete_text
+                        )
+
+                        st.session_state.rag_index = index
+                        st.session_state.rag_chunks = chunks
+                        st.session_state.uploaded_file_name = (
+                            uploaded_file.name
+                        )
+
+                        st.success(
+                            f"✅ {uploaded_file.name} loaded"
+                        )
+
+                        st.caption(
+                            f"Pages: {len(reader.pages)}"
+                        )
+
+                        st.caption(
+                            f"Knowledge chunks: {len(chunks)}"
+                        )
+
+                except Exception as error:
+
+                    st.error(
+                        f"Could not process the PDF: {error}"
+                    )
+
+    elif st.session_state.uploaded_file_name:
+
+        st.session_state.rag_index = None
+        st.session_state.rag_chunks = []
+        st.session_state.uploaded_file_name = None
+
+    st.markdown("---")
+
     if st.button("🗑️ Clear Chat"):
+
         st.session_state.messages = []
+
+        st.session_state.memory = create_memory()
+
         st.rerun()
 
     st.markdown(
         """
         <div class="status-box">
-            <strong>AI Tutor</strong><br>
-            Your personalized learning assistant.
+            <strong>🤖 AI Study Tutor</strong><br>
+            Learn with personalized explanations,
+            quizzes, study plans, memory and your own notes.
         </div>
         """,
         unsafe_allow_html=True,
@@ -192,24 +288,31 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="subtitle">Your personal AI learning assistant</div>',
+    '<div class="subtitle">'
+    'Your personal AI learning assistant'
+    '</div>',
     unsafe_allow_html=True,
 )
 
 
 # =========================================================
-# INTRODUCTION CARD
+# INTRODUCTION
 # =========================================================
 
 if not st.session_state.messages:
+
     st.markdown(
         """
         <div class="info-card">
-            <h3>✨ Welcome to your AI Study Tutor</h3>
-            <p>
-                Enter your subject, choose your learning level, describe your goal,
-                and ask me anything you want to learn.
-            </p>
+
+        <h3>✨ Welcome to your AI Study Tutor</h3>
+
+        <p>
+        Enter your subject, select your learning level,
+        describe your learning goal and start asking questions.
+        You can also upload your own study PDF.
+        </p>
+
         </div>
         """,
         unsafe_allow_html=True,
@@ -217,11 +320,13 @@ if not st.session_state.messages:
 
 
 # =========================================================
-# DISPLAY PREVIOUS CHAT
+# DISPLAY CHAT HISTORY
 # =========================================================
 
 for message in st.session_state.messages:
+
     with st.chat_message(message["role"]):
+
         st.markdown(message["content"])
 
 
@@ -237,32 +342,39 @@ user_prompt = st.chat_input(
 if user_prompt:
 
     # -----------------------------------------------------
-    # Validate basic user information
+    # VALIDATION
     # -----------------------------------------------------
 
     if not subject:
-        st.warning("Please enter a subject from the sidebar first.")
+
+        st.warning(
+            "📚 Please enter your subject first."
+        )
+
         st.stop()
 
     if not learning_goal:
-        st.warning("Please enter your learning goal from the sidebar first.")
-        st.stop()
 
-    # -----------------------------------------------------
-    # Get Groq client
-    # -----------------------------------------------------
-
-    client = get_groq_client()
-
-    if client is None:
-        st.error(
-            "GROQ_API_KEY is not configured. "
-            "Please add GROQ_API_KEY to your Streamlit Secrets."
+        st.warning(
+            "🚀 Please enter your learning goal first."
         )
+
         st.stop()
 
     # -----------------------------------------------------
-    # Save user message
+    # CREATE / UPDATE MEMORY
+    # -----------------------------------------------------
+
+    st.session_state.memory = update_memory(
+        st.session_state.memory,
+        subject=subject,
+        level=level,
+        learning_goal=learning_goal,
+        question=user_prompt,
+    )
+
+    # -----------------------------------------------------
+    # SAVE USER MESSAGE
     # -----------------------------------------------------
 
     st.session_state.messages.append(
@@ -273,72 +385,235 @@ if user_prompt:
     )
 
     with st.chat_message("user"):
+
         st.markdown(user_prompt)
 
     # -----------------------------------------------------
-    # System instructions for the tutor
+    # CREATE STUDY TUTOR
     # -----------------------------------------------------
 
-    system_prompt = f"""
-You are an AI Study Tutor.
+    try:
 
-Your job is to help the student learn clearly and effectively.
+        tutor = create_study_tutor(
+            subject=subject,
+            level=level,
+            learning_goal=learning_goal,
+        )
 
-Student information:
-- Subject: {subject}
-- Learning level: {level}
-- Learning goal: {learning_goal}
+    except Exception as error:
 
-Teaching rules:
-1. Explain concepts according to the student's learning level.
-2. Use simple and clear language.
-3. Break difficult concepts into smaller steps.
-4. Give examples when useful.
-5. Do not overwhelm the student with unnecessary information.
-6. If the student seems confused, explain the concept in an easier way.
-7. Encourage active learning by asking short follow-up questions when appropriate.
-8. If the student asks for a study plan, create a practical plan based on their goal.
-9. If the student asks for a quiz, create questions suitable for their level.
-10. Stay focused on helping the student learn.
+        st.error(
+            f"Could not initialize the AI Tutor: {error}"
+        )
+
+        st.stop()
+
+    # -----------------------------------------------------
+    # MEMORY CONTEXT
+    # -----------------------------------------------------
+
+    memory_context = get_memory_summary(
+        st.session_state.memory
+    )
+
+    # -----------------------------------------------------
+    # DETECT SPECIAL TOOL REQUESTS
+    # -----------------------------------------------------
+
+    prompt_lower = user_prompt.lower()
+
+    tool_instruction = ""
+
+    # Quiz
+    if (
+        "quiz" in prompt_lower
+        or "mcq" in prompt_lower
+        or "test me" in prompt_lower
+    ):
+
+        tool_instruction = create_quiz(
+            topic=subject,
+            level=level,
+            number_of_questions=5,
+        )
+
+    # Study plan
+    elif (
+        "study plan" in prompt_lower
+        or "learning plan" in prompt_lower
+        or "schedule" in prompt_lower
+    ):
+
+        tool_instruction = create_study_plan(
+            subject=subject,
+            topic=user_prompt,
+            level=level,
+            learning_goal=learning_goal,
+            duration_days=7,
+        )
+
+    # Explain
+    elif (
+        "explain" in prompt_lower
+        or "what is" in prompt_lower
+        or "what are" in prompt_lower
+        or "how does" in prompt_lower
+    ):
+
+        tool_instruction = explain_topic(
+            topic=user_prompt,
+            level=level,
+        )
+
+    # Weak topic
+    elif (
+        "wrong" in prompt_lower
+        or "mistake" in prompt_lower
+        or "weak" in prompt_lower
+        or "check my answer" in prompt_lower
+    ):
+
+        tool_instruction = analyze_weak_topic(
+            topic=subject,
+            student_answer=user_prompt,
+        )
+
+    # -----------------------------------------------------
+    # PDF / RAG SEARCH
+    # -----------------------------------------------------
+
+    retrieved_context = ""
+
+    if (
+        st.session_state.rag_index is not None
+        and st.session_state.rag_chunks
+    ):
+
+        with st.spinner("📚 Searching your study material..."):
+
+            try:
+
+                results = search_documents(
+                    question=user_prompt,
+                    chunks=st.session_state.rag_chunks,
+                    index=st.session_state.rag_index,
+                    top_k=5,
+                )
+
+                if results:
+
+                    context_parts = []
+
+                    for result in results:
+
+                        context_parts.append(
+                            result["text"]
+                        )
+
+                    retrieved_context = "\n\n".join(
+                        context_parts
+                    )
+
+            except Exception as error:
+
+                st.warning(
+                    f"PDF search could not be completed: {error}"
+                )
+
+    # -----------------------------------------------------
+    # BUILD ENHANCED USER CONTEXT
+    # -----------------------------------------------------
+
+    enhanced_prompt = f"""
+STUDENT MEMORY
+--------------
+{memory_context}
+
+"""
+
+    if tool_instruction:
+
+        enhanced_prompt += f"""
+SPECIAL STUDY TOOL INSTRUCTION
+------------------------------
+{tool_instruction}
+
+"""
+
+    if retrieved_context:
+
+        enhanced_prompt += f"""
+STUDENT'S UPLOADED STUDY MATERIAL
+---------------------------------
+The following information was retrieved from the student's
+uploaded PDF.
+
+Use this material when it is relevant to the question.
+
+IMPORTANT:
+- Do not invent information from the PDF.
+- If the answer is not available in the retrieved material,
+  clearly say that it is not found in the uploaded material.
+- The PDF contains page markers such as [PAGE 1], [PAGE 2], etc.
+- Mention the relevant page when possible.
+
+PDF SOURCE:
+{st.session_state.uploaded_file_name}
+
+RETRIEVED CONTENT:
+{retrieved_context}
+
+"""
+
+    enhanced_prompt += f"""
+CURRENT STUDENT QUESTION
+------------------------
+{user_prompt}
 """
 
     # -----------------------------------------------------
-    # Prepare conversation
+    # BUILD CONVERSATION
     # -----------------------------------------------------
 
-    api_messages = [
-        {
-            "role": "system",
-            "content": system_prompt,
-        }
-    ]
+    conversation = []
 
-    for message in st.session_state.messages:
-        api_messages.append(
+    # Add previous conversation
+    for message in st.session_state.messages[:-1]:
+
+        conversation.append(
             {
                 "role": message["role"],
                 "content": message["content"],
             }
         )
 
+    # Add enhanced current request
+    conversation.append(
+        {
+            "role": "user",
+            "content": enhanced_prompt,
+        }
+    )
+
     # -----------------------------------------------------
-    # Generate AI response
+    # GENERATE RESPONSE
     # -----------------------------------------------------
 
     with st.chat_message("assistant"):
 
-        with st.spinner("🤖 Your AI Tutor is thinking..."):
+        with st.spinner(
+            "🤖 Your AI Tutor is thinking..."
+        ):
 
             try:
-                response = client.chat.completions.create(
-                    model="openai/gpt-oss-120b",
-                    messages=api_messages,
-                    temperature=0.4,
+
+                assistant_response = run_study_tutor(
+                    tutor=tutor,
+                    conversation=conversation,
                 )
 
-                assistant_response = response.choices[0].message.content
-
             except Exception as error:
+
                 assistant_response = (
                     "I couldn't generate a response right now.\n\n"
                     f"Error: {error}"
@@ -347,7 +622,7 @@ Teaching rules:
         st.markdown(assistant_response)
 
     # -----------------------------------------------------
-    # Save assistant response
+    # SAVE ASSISTANT RESPONSE
     # -----------------------------------------------------
 
     st.session_state.messages.append(
